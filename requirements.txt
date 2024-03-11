@@ -1,5 +1,10 @@
 pandas
 numpy
+scipy
 PyWavelets
 hmmlearn
 pandas_ta
+matplotlib
+torch
+lightning
+plotly
