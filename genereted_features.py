@@ -333,3 +333,161 @@ def sinc_filter(source, length):
 def sinc(source, bandwidth):
     omega = np.pi * source / bandwidth
     return np.sin(omega) / omega if source != 0.0 else 1.0
+
+
+
+#%% HLT 
+import pandas as pd
+
+class HLT:
+    def __init__(self, length=23, offset=4, use_high_and_low=False, ema_period=9):
+        """
+        Ініціалізація класу HLT (Highest-Lowest Trend).
+
+        Параметри:
+        length (int): Довжина вікна для визначення найвищих та найнижчих значень. За замовчуванням 23.
+        offset (int): Зсув для визначення найвищих та найнижчих значень. За замовчуванням 4.
+        use_high_and_low (bool): Якщо True, використовується high та low ціни для визначення тренду. Якщо False, використовується close.
+        ema_period (int): Період експоненційної рухомої середньої для гладкості HLT. За замовчуванням 9.
+        """
+        self.length = length
+        self.offset = offset
+        self.use_high_and_low = use_high_and_low
+        self.ema_period = ema_period
+    
+    def transform(self, X, y=None):
+        # Use high, low or close based on the input flag
+        src = X['high'] if self.use_high_and_low else X['close']
+
+        # Calculate highest and lowest values with the specified length and offset
+        X['hlt_upper'] = src.rolling(window=self.length).max().shift(self.offset)
+        X['hlt_lower'] = src.rolling(window=self.length).min().shift(self.offset)
+
+        # Initialize HLT series
+        hlt = pd.Series(index=X.index, dtype='float64')
+
+        for i in range(len(X)):
+            if src.iloc[i] > X['hlt_upper'].iloc[i]:
+                hlt.iloc[i] = X['hlt_lower'].iloc[i]
+            elif src.iloc[i] < X['hlt_lower'].iloc[i]:
+                hlt.iloc[i] = X['hlt_upper'].iloc[i]
+            else:
+                hlt.iloc[i] = hlt.iloc[i-1] if i > 0 else 0.0
+
+        X['hlt'] = np.sign(hlt.diff())
+        X['hlt_ema'] = hlt.ewm(span=self.ema_period, adjust=False).mean()
+
+        return X[['hlt','hlt_ema']]
+
+# hlt = HLT()
+# df_with_hlt = hlt.transform(X)
+# df_with_hlt.hlt = df_with_hlt.hlt * 1000
+# X.close.plot()
+# df_with_hlt.hlt.plot()
+# df_with_hlt.hlt_ema.plot()
+
+#%% Ribbon
+
+import pandas as pd
+import numpy as np
+import pandas_ta as ta
+
+class Ribbon:
+    
+    def __init__(self, price_column='close', methods=['phi_smoother', 'tema', 'dema', 'wma', 'ema', 'sma'], lengths=None):
+        """
+        Ribbon
+        Параметри:
+        price_column (str): Назва колонки з цінами, яка буде використовуватися для обчислення. За замовчуванням 'close'.
+        methods (list): Список методів для обчислення різних середніх. За замовчуванням включає ['phi_smoother', 'tema', 'dema', 'wma', 'ema', 'sma'].
+        lengths (list): Список довжин для обчислення середніх. Якщо не вказано, використовується діапазон від 5 до 160 з кроком 5.
+        """
+        self.price_column = price_column
+        self.methods = methods
+        self.lengths = lengths
+        if self.lengths is None:
+            self.lengths = list(range(5, 165, 5))
+
+    def phi_smoother(self, df, column, length, phase=3.7):
+        SQRT_PIx2 = np.sqrt(2.0 * np.pi)
+        MULTIPLIER = -0.5 / 0.93
+        length_2 = length * 0.52353
+
+        if length > 1:
+            weights = []
+            for i in range(length):
+                alpha = (i + phase - length_2) * MULTIPLIER
+                beta = 1.0 / (0.2316419 * abs(alpha) + 1.0)
+                phi = (np.exp(alpha**2 * -0.5) * -0.398942280) * beta * \
+                    (0.319381530 + beta * (-0.356563782 + beta * \
+                    (1.781477937 + beta * (-1.821255978 + beta * 1.330274429)))) + 1.011
+                if alpha < 0:
+                    phi = 1.0 - phi
+                weight = phi / SQRT_PIx2
+                weights.append(weight)
+
+            weights = np.array(weights)
+            if column in df.columns:
+                df_smooth = df[column].rolling(window=length).apply(lambda x: np.dot(x[-len(weights):], weights) / np.sum(weights), raw=True)
+                return df_smooth
+            else:
+                raise ValueError(f"Column '{column}' not found in DataFrame.")
+        else:
+            return df[column]
+
+
+    def tema(self, series, length):
+        return ta.tema(series, length=length)
+
+    def dema(self, series, length):
+        return ta.dema(series, length=length)
+
+    def wma(self, series, length):
+        return ta.wma(series, length=length)
+
+    def ema(self, series, length):
+        return ta.ema(series, length=length)
+
+    def sma(self, series, length):
+        return ta.sma(series, length=length)
+
+    def compute_ribbon(self, df, price_column, methods, lengths):
+        ribbons = {}
+        for method in methods:
+            method_function = getattr(self, method)
+            if method == 'phi_smoother':
+                # Special handling for phi_smoother, which needs the DataFrame and column name
+                ribbons[method] = [method_function(df, price_column, length) for length in lengths]
+            else:
+                # For other methods, assuming they only need the series and length
+                ribbons[method] = [method_function(df[price_column], length) for length in lengths]
+        return ribbons
+
+
+    def _transform(self, X, y=None):
+        ribbons = self.compute_ribbon(X, self.price_column, self.methods, self.lengths)
+
+        oscillator_values = []
+        # Calculating the slope of each ribbon and oscillator values
+        for method in self.methods:
+            for length in self.lengths:
+                ribbon = ribbons[method][self.lengths.index(length)]
+                X[f'{method}_{length}_slope'] = ribbon.diff()
+
+            # Calculating ribbon differences
+            ribbon_diff = ribbons[method][0] - ribbons[method][-1]
+            X[f'{method}_ribbon_diff'] = ribbon_diff
+            X[f'{method}_volatility'] = ribbon_diff.rolling(window=30).std()
+            oscillator_values.append(ribbon_diff)
+
+        # Simple oscillator: average of differences
+        X['composit_trend'] = np.mean(oscillator_values, axis=0)
+
+        return_columns = ['composit_trend'] + [ f'{method}_ribbon_diff' for m in self.methods] + [ f'{method}_volatility' for m in self.methods]
+        return X[return_columns]
+
+# # Usage
+# ribbon = Ribbon()
+# df_with_indicators = ribbon.transform(X)
+# df_with_indicators.composit_trend.plot()
+# X['close'].plot()

@@ -19,13 +19,31 @@ def ichimoku_cloud(df):
 
 
 def fibonacci_retracement(df):
-    max_price = df['high'].max()
-    min_price = df['low'].min()
-    difference = max_price - min_price
-    df['fib_r1'] = max_price - 0.236 * difference  # 23.6%
-    df['fib_r2'] = max_price - 0.382 * difference  # 38.2%
-    df['fib_r3'] = max_price - 0.618 * difference  # 61.8%
+    """
+    Calculate Fibonacci retracement levels for a given DataFrame.
+
+    The function expects a DataFrame with columns 'high' and 'low',
+    representing the highest and lowest prices. It computes the
+    Fibonacci retracement levels at 23.6%, 38.2%, and 61.8%, and
+    adds these as new columns to the DataFrame.
+
+    Parameters:
+    df (DataFrame): A pandas DataFrame with 'high' and 'low' columns.
+
+    Returns:
+    DataFrame: The original DataFrame with added columns for Fibonacci retracement levels.
+    """
+    
+    # max_price = df['high'].max()
+    # min_price = df['low'].min()
+    # difference = max_price - min_price
+
+    # levels = [0.236, 0.382, 0.618]
+    # for level in levels:
+    #     df[f'fib_r{int(level * 100)}'] = max_price - level * difference
+
     return df
+
 
 
 def pivot_points(df):
@@ -121,8 +139,14 @@ def add_features(df, coef=1):
     df = volume_oscillator(df)
     df = keltner_channel(df)
 
+
+    r = Ribbon()
+    df = pd.merge(df, r._transform(df), left_index=True, right_index=True)
     # generated
-    df = renko(df, brick_size=int(round(df['ATR'].iloc[-1])))
-    df = super_guppy(df)
+    #df = renko(df, brick_size=int(round(df['ATR'].iloc[-1])))
+    #df = super_guppy(df)
+
+    bool_columns = df.select_dtypes(include='bool')
+    df[bool_columns.columns] = bool_columns.astype(float)
     
     return df
